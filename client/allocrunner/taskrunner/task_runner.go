@@ -328,6 +328,13 @@ func NewTaskRunner(config *Config) (*TaskRunner, error) {
 		return nil, err
 	}
 
+	//FIXME(schmichael) move to Run to more gracefully handle errors?
+	// Load existing task handle
+	if err := tr.loadTaskHandle(); err != nil {
+		tr.logger.Error("failed to load existing task handle: %v", err)
+		return nil, err
+	}
+
 	// Initialize the runners hooks.
 	tr.initHooks()
 
@@ -387,7 +394,7 @@ func (tr *TaskRunner) initLabels() {
 
 // Mark a task as failed and not to run.  Aimed to be invoked when alloc runner
 // prestart hooks failed.
-// Should never be called with Run().
+// Should never be called with Run.
 func (tr *TaskRunner) MarkFailedDead(reason string) {
 	defer close(tr.waitCh)
 
@@ -974,7 +981,8 @@ func (tr *TaskRunner) Restore() error {
 func (tr *TaskRunner) restoreHandle(taskHandle *drivers.TaskHandle, net *drivers.DriverNetwork) (success bool) {
 	// Ensure handle is well-formed
 	if taskHandle.Config == nil {
-		return true
+		tr.logger.Error("task handle is not well-formed")
+		return false
 	}
 
 	if err := tr.driver.RecoverTask(taskHandle); err != nil {
@@ -1025,6 +1033,15 @@ func (tr *TaskRunner) UpdateState(state string, event *structs.TaskEvent) {
 		// Only log the error as we persistence errors should not
 		// affect task state.
 		tr.logger.Error("error persisting task state", "error", err, "event", event, "state", state)
+	}
+
+	// Store task handle for remote tasks
+	//FIXME(schmichael) determine when driverCaps can be nil, does it need a lock?
+	if tr.driverCapabilities != nil && tr.driverCapabilities.RemoteTasks {
+		if err := tr.localState.TaskHandle.Store(tr.state); err != nil {
+			//FIXME(schmichael) more drastic action needed?
+			tr.logger.Error("error storing task handle for remote task", "error", err)
+		}
 	}
 
 	// Notify the alloc runner of the transition
@@ -1374,6 +1391,27 @@ func (tr *TaskRunner) TaskExecHandler() drivermanager.TaskExecHandler {
 	return handle.ExecStreaming
 }
 
+//FIXME(schmichael) why doesn't this opportunistically use tr.driverCapabilities?!
 func (tr *TaskRunner) DriverCapabilities() (*drivers.Capabilities, error) {
 	return tr.driver.Capabilities()
+}
+
+// Mut be called after initDriver
+func (tr *TaskRunner) loadTaskHandle() error {
+	th, err := drivers.NewTaskHandleFromState(tr.state)
+	if err != nil {
+		return err
+	}
+	if th == nil {
+		return nil
+	}
+
+	if err := tr.driver.RecoverTask(th); err != nil {
+		return err
+	}
+
+	//FIXME(schmichael) drivernetwork
+	tr.setDriverHandle(NewDriverHandle(tr.driver, th.Config.ID, tr.Task(), nil))
+
+	return nil
 }

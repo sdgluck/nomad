@@ -1,6 +1,7 @@
 package drivers
 
 import (
+	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/plugins/base"
 )
 
@@ -44,4 +45,24 @@ func (h *TaskHandle) Copy() *TaskHandle {
 	handle.DriverState = make([]byte, len(h.DriverState))
 	copy(handle.DriverState, h.DriverState)
 	return handle
+}
+
+// Store this TaskHandle on the TaskState.
+func (h *TaskHandle) Store(ts *structs.TaskState) error {
+	ts.TaskHandle = []byte{}
+	return base.MsgPackEncode(&ts.TaskHandle, h)
+}
+
+// NewTaskHandleFromState returns the TaskHandle stored in a TaskState or nil
+// if no handle was stored.
+func NewTaskHandleFromState(ts *structs.TaskState) (*TaskHandle, error) {
+	if len(ts.TaskHandle) == 0 {
+		return nil, nil
+	}
+
+	h := &TaskHandle{}
+	if err := base.MsgPackDecode(ts.TaskHandle, h); err != nil {
+		return nil, err
+	}
+	return h, nil
 }
