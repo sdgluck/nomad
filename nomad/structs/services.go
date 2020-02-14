@@ -471,14 +471,11 @@ func (s *Service) Hash(allocID, taskName string, canary bool) string {
 	hashString(h, s.AddressMode)
 	hashTags(h, s.Tags)
 	hashTags(h, s.CanaryTags)
+	hashBool(h, canary, "Canary")
+	hashBool(h, s.EnableTagOverride, "ETO")
 	hashMeta(h, s.Meta)
 	hashMeta(h, s.CanaryMeta)
 	hashConnect(h, s.Connect)
-
-	// Vary ID on whether or not CanaryTags will be used
-	if canary {
-		h.Write([]byte("Canary"))
-	}
 
 	// Base32 is used for encoding the hash as sha1 hashes can always be
 	// encoded without padding, only 4 bytes larger than base64, and saves
@@ -505,6 +502,12 @@ func hashConnect(h hash.Hash, connect *ConsulConnect) {
 
 func hashString(h hash.Hash, s string) {
 	_, _ = io.WriteString(h, s)
+}
+
+func hashBool(h hash.Hash, b bool, name string) {
+	if b {
+		hashString(h, name)
+	}
 }
 
 func hashTags(h hash.Hash, tags []string) {
