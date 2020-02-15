@@ -142,6 +142,8 @@ func maybeTweakTags(wanted *api.AgentServiceRegistration, existing *api.AgentSer
 	if wanted.EnableTagOverride {
 		wanted.Tags = helper.CopySliceString(existing.Tags)
 	}
+
+	//
 }
 
 // different compares the wanted state of the service registration with the actual
@@ -365,7 +367,8 @@ func (c *ServiceClient) hasSeen() bool {
 // syncReason indicates why a sync operation with consul is about to happen.
 //
 // The trigger for a sync may have implications on the behavior of the sync itself.
-// In particular, if a service is defined with enable_tag_override=true
+// In particular if a service is defined with enable_tag_override=true, the sync
+// should ignore changes to the service's Tags field.
 type syncReason byte
 
 const (
@@ -579,25 +582,19 @@ func (c *ServiceClient) sync(reason syncReason) error {
 	}
 
 	// Add Nomad services missing from Consul, or where the service has been updated.
-	for id, local := range c.services {
-		existingSvc, ok := consulServices[id]
+	for id, svcInNomad := range c.services {
 
-		if ok {
-			// There is an existing registration of this service in Consul, so here
-			// we validate to see if the service has been invalidated to see if it
-			// should be updated.
-			if !agentServiceUpdateRequired(reason, local, existingSvc) {
-				// No Need to update services that have not changed
-				continue
+		svcInConsul, exists := consulServices[id]
+
+		if !exists || agentServiceUpdateRequired(reason, svcInNomad, svcInConsul) {
+			if err = c.client.ServiceRegister(svcInNomad); err != nil {
+				metrics.IncrCounter([]string{"client", "consul", "sync_failure"}, 1)
+				return err
 			}
+			sreg++
+			metrics.IncrCounter([]string{"client", "consul", "service_registrations"}, 1)
 		}
 
-		if err = c.client.ServiceRegister(local); err != nil {
-			metrics.IncrCounter([]string{"client", "consul", "sync_failure"}, 1)
-			return err
-		}
-		sreg++
-		metrics.IncrCounter([]string{"client", "consul", "service_registrations"}, 1)
 	}
 
 	// Remove Nomad checks in Consul but unknown locally
