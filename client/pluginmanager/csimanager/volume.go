@@ -34,8 +34,7 @@ type volumeManager struct {
 	logger hclog.Logger
 	plugin csi.CSIPlugin
 
-	volumes map[string]interface{}
-	// volumesMu sync.Mutex
+	usageTracker *volumeUsageTracker
 
 	// mountRoot is the root of where plugin directories and mounts may be created
 	// e.g /opt/nomad.d/statedir/csi/my-csi-plugin/
@@ -57,7 +56,7 @@ func newVolumeManager(logger hclog.Logger, plugin csi.CSIPlugin, rootDir, contai
 		mountRoot:           rootDir,
 		containerMountPoint: containerRootDir,
 		requiresStaging:     requiresStaging,
-		volumes:             make(map[string]interface{}),
+		usageTracker:        newVolumeUsageTracker(),
 	}
 }
 
@@ -254,7 +253,14 @@ func (v *volumeManager) MountVolume(ctx context.Context, vol *structs.CSIVolume,
 		}
 	}
 
-	return v.publishVolume(ctx, vol, alloc)
+	mountInfo, err := v.publishVolume(ctx, vol, alloc)
+	if err != nil {
+		return nil, err
+	}
+
+	v.usageTracker.Claim(alloc, vol)
+
+	return mountInfo, nil
 }
 
 // unstageVolume is the inverse operation of `stageVolume` and must be called
@@ -321,16 +327,16 @@ func (v *volumeManager) UnmountVolume(ctx context.Context, vol *structs.CSIVolum
 	logger := v.logger.With("volume_id", vol.ID, "alloc_id", alloc.ID)
 	ctx = hclog.WithContext(ctx, logger)
 
+	canRelease := v.usageTracker.Free(alloc, vol)
+
 	err := v.unpublishVolume(ctx, vol, alloc)
 	if err != nil {
 		return err
 	}
 
-	if !v.requiresStaging {
+	if !v.requiresStaging || !canRelease {
 		return nil
 	}
 
-	// TODO(GH-7029): Implement volume usage tracking and only unstage volumes
-	//                when the last alloc stops using it.
 	return v.unstageVolume(ctx, vol)
 }
