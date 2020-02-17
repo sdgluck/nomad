@@ -295,6 +295,28 @@ func (v *CSIVolume) Claim(args *structs.CSIVolumeClaimRequest, reply *structs.CS
 		return structs.ErrPermissionDenied
 	}
 
+	// Here we validate the existence of the volume and the allocation early to
+	// provide better errors to clients and to ensure that all the requisite state
+	// is available before starting to perform external actions.
+	state := v.srv.fsm.State()
+	ws := memdb.NewWatchSet()
+	vol, err := state.CSIVolumeByID(ws, args.VolumeID)
+	if err != nil {
+		return err
+	}
+	if vol == nil {
+		return fmt.Errorf("volume not found: %s", args.VolumeID)
+	}
+
+	alloc, err := state.AllocByID(ws, args.AllocationID)
+	if err != nil {
+		return err
+	}
+	if alloc == nil {
+		return fmt.Errorf("%s: %s", structs.ErrUnknownAllocationPrefix, args.AllocationID)
+	}
+	reply.Volume = vol
+
 	// adds a PublishContext from the controller (if any) to the reply
 	err = v.srv.controllerPublishVolume(args, reply)
 	if err != nil {
@@ -423,11 +445,18 @@ func (srv *Server) controllerPublishVolume(req *structs.CSIVolumeClaimRequest, r
 		return err // possibly nil if no controller required
 	}
 
+	state := srv.fsm.State()
+	ws := memdb.NewWatchSet()
+	alloc, err := state.AllocByID(ws, req.AllocationID)
+	if err != nil {
+		return err
+	}
+
 	method := "ClientCSI.AttachVolume"
 	cReq := &cstructs.ClientCSIControllerAttachVolumeRequest{
 		PluginName:     plug.ID,
 		VolumeID:       req.VolumeID,
-		NodeID:         req.Allocation.NodeID,
+		NodeID:         alloc.NodeID,
 		AttachmentMode: vol.AttachmentMode,
 		AccessMode:     vol.AccessMode,
 		ReadOnly:       req.Claim == structs.CSIVolumeClaimRead,
